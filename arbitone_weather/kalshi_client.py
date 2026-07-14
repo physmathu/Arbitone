@@ -87,11 +87,23 @@ class KalshiClient:
         get_markets() -- Kalshi already includes yes/no bid/ask on each
         market object (as dollar strings), so this avoids a second API
         call to the orderbook endpoint for the common case.
+ 
+        IMPORTANT: Kalshi appears to return "0.0000" for an ask field when
+        there's simply no resting order on that side (not a real $0.00 ask
+        someone would actually fill). Treating a 0-cent ask as a real,
+        fillable price would make thin/unquoted markets look like huge free
+        arbitrage when they're actually just illiquid. We treat 0 (and the
+        symmetric 100, which no_ask/yes_ask hit when the other side is
+        unquoted) as "no real quote" -> None, so the signal engine correctly
+        skips them instead of treating them as tradeable.
         """
         def to_cents(dollar_str: str | None) -> int | None:
             if dollar_str is None:
                 return None
-            return round(float(dollar_str) * 100)
+            cents = round(float(dollar_str) * 100)
+            if cents <= 0 or cents >= 100:
+                return None  # no real resting order on this side
+            return cents
  
         return MarketQuote(
             ticker=market["ticker"],
