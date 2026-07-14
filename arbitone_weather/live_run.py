@@ -24,8 +24,9 @@ Usage:
     python -m arbitone_weather.live_run
 """
 
+import csv
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from .config import CITIES, KALSHI_DEMO_BASE_URL, KALSHI_BASE_URL
 from .fair_value import prob_yes_for_market
@@ -38,9 +39,27 @@ from .signal_engine import evaluate_market, SignalAction
 # SAFETY SWITCHES -- change deliberately, not accidentally
 # ---------------------------------------------------------------------
 EXECUTE_TRADES = False                  # True = place real/demo orders. False = print-only.
-BASE_URL = KALSHI_DEMO_BASE_URL         # change to KALSHI_BASE_URL only when ready for real money
+BASE_URL = KALSHI_BASE_URL              # PRODUCTION for real prices (read-only, safe -- EXECUTE_TRADES
+                                         # is the actual money switch, not this URL). Kalshi's own docs
+                                         # say demo market prices don't reflect real markets, so demo
+                                         # is only useful once you're actually placing (fake) orders.
 TARGET_DATE = date.today() + timedelta(days=1)  # which day's high temp to evaluate
+
+LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "logs", "signals.csv")
+LOG_FIELDS = ["run_timestamp_utc", "city", "ticker", "strike_type", "threshold_f",
+              "noaa_forecast_f", "model_prob_cents", "market_yes_ask", "market_no_ask",
+              "edge_cents", "action"]
 # ---------------------------------------------------------------------
+
+
+def _append_log_row(row: dict):
+    file_exists = os.path.exists(LOG_PATH)
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    with open(LOG_PATH, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def run():
@@ -58,10 +77,16 @@ def run():
     noaa = NOAAClient()
     ledger = PaperLedger()
 
+    if EXECUTE_TRADES and BASE_URL == KALSHI_BASE_URL:
+        mode_label = "LIVE TRADING -- REAL MONEY"
+    elif EXECUTE_TRADES and BASE_URL == KALSHI_DEMO_BASE_URL:
+        mode_label = "DEMO TRADING (fake orders, fake money)"
+    else:
+        data_source = "production (real prices)" if BASE_URL == KALSHI_BASE_URL else "demo (NOT real prices)"
+        mode_label = f"PRINT-ONLY, reading {data_source} -- no orders placed, zero risk"
+
     print("=" * 60)
-    print(f"ARBITONE WEATHER MARKET MAKER -- LIVE DATA "
-          f"({'DEMO' if BASE_URL == KALSHI_DEMO_BASE_URL else 'PRODUCTION -- REAL MONEY'})")
-    print(f"Trade execution: {'ON' if EXECUTE_TRADES else 'OFF (print-only)'}")
+    print(f"ARBITONE WEATHER MARKET MAKER -- {mode_label}")
     print(f"Target date: {TARGET_DATE}")
     print("=" * 60)
 
@@ -114,6 +139,20 @@ def run():
                   f"model={signal.model_prob_cents}c market_yes_ask={signal.market_yes_ask_cents} "
                   f"market_no_ask={signal.market_no_ask_cents} edge={signal.edge_cents}c "
                   f"action={signal.action.value}")
+
+            _append_log_row({
+                "run_timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "city": city.name,
+                "ticker": ticker,
+                "strike_type": strike_type,
+                "threshold_f": threshold_f,
+                "noaa_forecast_f": forecast.high_temp_f,
+                "model_prob_cents": signal.model_prob_cents,
+                "market_yes_ask": signal.market_yes_ask_cents,
+                "market_no_ask": signal.market_no_ask_cents,
+                "edge_cents": signal.edge_cents,
+                "action": signal.action.value,
+            })
 
             if signal.action == SignalAction.NONE:
                 continue
