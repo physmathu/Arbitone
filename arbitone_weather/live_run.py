@@ -12,10 +12,10 @@ SAFETY
   money on their servers). To go live with real money, you must
   deliberately change BASE_URL to KALSHI_BASE_URL below -- this is a
   one-line change on purpose, so it's never accidental.
-- Before EXECUTE_TRADES=True, run inspect_markets.py first to confirm the
-  strike-price field name this code assumes ("floor_strike") actually
-  matches what Kalshi returns for your markets -- API field names can
-  differ or change.
+- Before EXECUTE_TRADES=True, run this in print-only mode for a while and
+  sanity-check the printed signals against what you see on kalshi.com
+  yourself. Field parsing has been verified against real API output
+  (both floor_strike/"greater" and cap_strike/"less" contract types).
 -----------------------------------------------------------------------
 
 Usage:
@@ -28,7 +28,7 @@ import os
 from datetime import date, timedelta
 
 from .config import CITIES, KALSHI_DEMO_BASE_URL, KALSHI_BASE_URL
-from .fair_value import prob_high_at_or_above
+from .fair_value import prob_yes_for_market
 from .kalshi_client import KalshiClient
 from .noaa_client import NOAAClient
 from .paper_trader import PaperLedger
@@ -88,26 +88,29 @@ def run():
 
         for market in markets:
             ticker = market["ticker"]
+            strike_type = market.get("strike_type")  # "greater" -> floor_strike, "less" -> cap_strike
 
-            # NOTE: verify this field name with inspect_markets.py -- Kalshi's
-            # strike-price field name may differ (floor_strike, cap_strike,
-            # strike_price, etc. depending on contract type).
-            threshold_f = market.get("floor_strike")
+            if strike_type == "greater":
+                threshold_f = market.get("floor_strike")
+            elif strike_type == "less":
+                threshold_f = market.get("cap_strike")
+            else:
+                print(f"  Skipping {ticker}: unhandled strike_type {strike_type!r} "
+                      f"(check inspect_markets.py output for this market).")
+                continue
+
             if threshold_f is None:
-                print(f"  Skipping {ticker}: couldn't find strike price field "
-                      f"(run inspect_markets.py to find the right field name).")
+                print(f"  Skipping {ticker}: no strike value found for strike_type={strike_type!r}.")
                 continue
 
-            try:
-                quote = kalshi.get_orderbook(ticker)
-            except Exception as e:
-                print(f"  Orderbook fetch failed for {ticker}: {e}")
-                continue
+            # Kalshi already includes bid/ask on the market object itself,
+            # no separate orderbook call needed.
+            quote = KalshiClient.quote_from_market(market)
 
-            model_prob = prob_high_at_or_above(forecast.high_temp_f, float(threshold_f))
+            model_prob = prob_yes_for_market(forecast.high_temp_f, float(threshold_f), strike_type)
             signal = evaluate_market(ticker, model_prob, quote)
 
-            print(f"  {ticker} (threshold {threshold_f}F): "
+            print(f"  {ticker} ({strike_type} {threshold_f}F): "
                   f"model={signal.model_prob_cents}c market_yes_ask={signal.market_yes_ask_cents} "
                   f"market_no_ask={signal.market_no_ask_cents} edge={signal.edge_cents}c "
                   f"action={signal.action.value}")
