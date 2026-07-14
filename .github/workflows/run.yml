@@ -1,0 +1,40 @@
+name: Run weather market maker (print-only)
+ 
+# Runs automatically 4x/day, plus you can trigger it manually from the
+# Actions tab any time. Trading stays OFF (EXECUTE_TRADES=False in
+# live_run.py) -- this only logs signals, it never places real or demo
+# orders on its own.
+on:
+  schedule:
+    - cron: "0 6,12,18,23 * * *"   # UTC times -- adjust to your preferred hours
+  workflow_dispatch:                # lets you click "Run workflow" manually on GitHub
+ 
+permissions:
+  contents: write   # needed so the workflow can commit the updated log file back
+ 
+jobs:
+  run-signals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+ 
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+ 
+      - name: Run live signal check
+        run: python -m arbitone_weather.live_run
+ 
+      - name: Commit updated log
+        run: |
+          git config user.name "arbitone-bot"
+          git config user.email "[email protected]"
+          git add logs/signals.csv
+          git diff --quiet --cached || git commit -m "Log signals: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
+ 
